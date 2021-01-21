@@ -5,6 +5,7 @@ from torchmeta.datasets.helpers import omniglot, miniimagenet
 from torchmeta.utils.data import BatchMetaDataLoader
 from torchmeta.utils.gradient_based import gradient_update_parameters
 from model import MetaDropout
+from learner import *
 from tqdm import tqdm
 
 
@@ -23,7 +24,7 @@ def get_args():
     parser.add_argument(
         '--num-ways',
         type=int,
-        default=5,
+        default=20,
         help='Number of classes per task (N in "N-way", default: 5).')
     parser.add_argument(
         '--maml',
@@ -53,7 +54,7 @@ def get_args():
     parser.add_argument(
         '--num-iters',
         type=int,
-        default=60000,
+        default=40000,
         help='Number of batches the model is trained over (default: 100).')
     parser.add_argument(
         '--num-workers',
@@ -67,12 +68,13 @@ def get_args():
     parser.add_argument('--use-cuda',
                         action='store_true',
                         help='Use CUDA if available.')
+    parser.add_argument('--verbose', type=bool, default=True)
     parser.add_argument(
-        '--train',
-        type=bool,
-        default=True,
+        '--mode',
+        type=str,
+        default='train',
         help='Specify whether you want to train/evaluate the model')
-    parser.add_argument('--inner-steps',
+    parser.add_argument('--num_steps',
                         type=int,
                         default=5,
                         help='Number of inner loop steps')
@@ -80,10 +82,15 @@ def get_args():
                         type=float,
                         default=0.1,
                         help='Learning rate of the inner optimization loop')
-    parser.add_argument('--outer-lr',
+    parser.add_argument('--meta-lr',
                         type=float,
                         default=0.1,
                         help='Learning rate of the outer optimization loop')
+    parser.add_argument('--grad-clip',
+                        type=float,
+                        default=3.0,
+                        help='Gradient clipping value')
+
     args = parser.parse_args()
     return args
 
@@ -96,82 +103,46 @@ def get_dataloader(args):
                            ways=args.num_ways,
                            shuffle=True,
                            test_shots=15,
-                           meta_train=args.train,
+                           meta_train=args.mode == 'train',
                            download=args.download)
-    elif args.dataset == 'miniimagenet':
+    else:
         dataset = miniimagenet(args.folder,
                                shots=args.num_shots,
                                ways=args.num_ways,
                                shuffle=True,
                                test_shots=15,
-                               meta_train=args.train,
+                               meta_train=args.mode == 'train',
                                download=args.download)
-    else:
-        raise ValueError(
-            f'Does not support the dataset: {args.dataset}. Datasets supported: omniglot, miniimagenet'
-        )
 
     dataloader = BatchMetaDataLoader(dataset,
                                      batch_size=args.batch_size,
                                      shuffle=True,
-                                     num_workers=args.num_workers)
+                                     num_workers=args.num_workers,
+                                     pin_memory=True)
     return dataloader
 
 
-def train(args, dataloader, model):
+def train(args, model, dataloader):
 
     model.to(device=args.device)
     model.train()
-    meta_optimizer = torch.optim.Adam(model.parameters(), args.outer_lr)
+    meta_optimizer = torch.optim.Adam(model.parameters(), args.meta_lr)
+    metalearner = MetaDropoutLearner(model,
+                                     meta_optimizer,
+                                     num_adaptation_steps=args.num_steps,
+                                     step_size=args.step_size,
+                                     grad_clip=args.grad_clip,
+                                     device=args.device)
+
     # Training loop
-    with tqdm(dataloader, total=args.num_iters) as pbar:
-        for batch_idx, batch in enumerate(pbar):
-            model.zero_grad()
-
-            train_inputs, train_targets = batch['train']
-            train_inputs = train_inputs.to(device=args.device)
-            train_targets = train_targets.to(device=args.device)
-
-            test_inputs, test_targets = batch['test']
-            test_inputs = test_inputs.to(device=args.device)
-            test_targets = test_targets.to(device=args.device)
-
-            print(train_inputs.size(), test_inputs.size())
-            outer_loss = torch.tensor(0., device=args.device)
-            accuracy = torch.tensor(0., device=args.device)
-            for task_idx, (train_input, train_target, test_input,
-                           test_target) in enumerate(
-                               zip(train_inputs, train_targets, test_inputs,
-                                   test_targets)):
-                print(train_input.size(), test_inputs.size())
-                train_logit = model(train_input)
-                inner_loss = F.cross_entropy(train_logit, train_target)
-
-                model.zero_grad()
-                # Get the main network parameters
-                params = model.get_main_net_params()
-                # Get the gradients of the main network
-                params = gradient_update_parameters(model,
-                                                    inner_loss,
-                                                    params,
-                                                    step_size=args.inner_lr,
-                                                    first_order=False)
-
-                test_logit = model(test_input, params=params)
-                outer_loss += F.cross_entropy(test_logit, test_target)
-
-                # with torch.no_grad():
-                #     accuracy += get_accuracy(test_logit, test_target)
-
-            outer_loss.div_(args.batch_size)
-            accuracy.div_(args.batch_size)
-
-            outer_loss.backward()
-            meta_optimizer.step()
-
-            pbar.set_postfix(accuracy='{0:.4f}'.format(accuracy.item()))
-            if batch_idx >= args.num_iters:
-                break
+    metalearner.train(dataloader,
+                      max_batches=834,
+                      verbose=args.verbose,
+                      desc='Training',
+                      leave=False)
+    # Save best mode
+    with open(args.model_path, 'wb') as f:
+        torch.save(model.state_dict(), f)
 
 
 if __name__ == '__main__':
@@ -185,5 +156,5 @@ if __name__ == '__main__':
     # load the dataloader
     dataloader = get_dataloader(args)
 
-    if args.train:
-        train(args, dataloader, model)
+    if args.mode == 'train':
+        train(args, model, dataloader)
