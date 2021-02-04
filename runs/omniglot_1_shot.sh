@@ -1,29 +1,29 @@
 python main.py \
-  --savedir './results/metadrop/omni_1shot' \
+  --savedir './results/omni_1shot' \
   --dataset 'omniglot' \
-  --mode 'meta_train' \
-  --gpu_id 0 \
-  --metabatch 4 \
-  --n_steps 5 \
+  --mode 'train' \
+  --batch_size 8 \
+  --num_adapt_steps 5 \
   --inner_lr 0.1 \
-  --way 20 \
-  --shot 1 \
-  --query 15 \
-  --n_train_iters 60000 \
-  --meta_lr 3e-4 \
-  --n_test_mc_samp 1
+  --num_ways 20 \
+  --num_shots 1 \
+  --num_query 15 \
+  --num_iters 40000 \
+  --num_workers 4 \
+  --meta_lr 1e-3 \
+  --mc_steps 1 \
+  --grad_clip 3 \
 
 python main.py \
-  --savedir './results/metadrop/omni_1shot' \
+  --savedir './results/omni_1shot' \
   --dataset 'omniglot' \
-  --mode 'meta_test' \
-  --gpu_id 0 \
-  --metabatch 1 \
-  --n_steps 5 \
+  --mode 'test' \
+  --batch_size 1 \
+  --num_adapt_steps 5 \
   --inner_lr 0.1 \
-  --way 20 \
-  --shot 1 \
-  --query 15 \
-  --n_train_iters 60000 \
-  --meta_lr 3e-4 \
-  --n_test_mc_samp 30
+  --num_ways 20 \
+  --num_shots 1 \
+  --num_query 15 \
+  --n_train_iters 40000 \
+  --meta_lr 1e-3 \
+  --mc_steps 30

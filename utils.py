@@ -42,8 +42,9 @@ def gradient_update_parameters(model,
 
     if params is None:
         params = OrderedDict(model.meta_named_parameters())
-
+    print("before grad")
     grads = torch.autograd.grad(loss, params.values(), create_graph=True)
+    print("after grad")
 
     updated_params = OrderedDict()
 

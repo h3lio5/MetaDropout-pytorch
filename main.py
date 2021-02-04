@@ -3,10 +3,11 @@ import torch.nn.functional as F
 import argparse
 from torchmeta.datasets.helpers import omniglot, miniimagenet
 from torchmeta.utils.data import BatchMetaDataLoader
-from torchmeta.utils.gradient_based import gradient_update_parameters
+import higher
 from model import MetaDropout
-from learner import *
+from temp import *
 from tqdm import tqdm
+import json
 
 
 def get_args():
@@ -32,17 +33,12 @@ def get_args():
         default=False,
         help=
         'Specify whether to train MAML or MetaDropout (default: MetaDropout)')
-    parser.add_argument(
-        '--step-size',
-        type=float,
-        default=0.4,
-        help='Step-size for the gradient step for adaptation (default: 0.4).')
     parser.add_argument('--dataset',
                         type=str,
                         default='omniglot',
                         help='Dataset to train on (default: omniglot')
     parser.add_argument(
-        '--output-folder',
+        '--savedir',
         type=str,
         default=None,
         help='Path to the output folder for saving the model (optional).')
@@ -55,7 +51,12 @@ def get_args():
         '--num-iters',
         type=int,
         default=40000,
-        help='Number of batches the model is trained over (default: 100).')
+        help='Number of batches the model is trained over (default: 40000).')
+    parser.add_argument(
+        '--num-test-iters',
+        type=int,
+        default=1000,
+        help='Number of batches the model is tested over (default: 1000).')
     parser.add_argument(
         '--num-workers',
         type=int,
@@ -65,19 +66,24 @@ def get_args():
         '--download',
         action='store_true',
         help='Download the Omniglot dataset in the data folder.')
-    parser.add_argument('--use-cuda',
-                        action='store_true',
-                        help='Use CUDA if available.')
     parser.add_argument('--verbose', type=bool, default=True)
     parser.add_argument(
         '--mode',
         type=str,
         default='train',
         help='Specify whether you want to train/evaluate the model')
-    parser.add_argument('--num_steps',
+    parser.add_argument('--num_query',
+                        type=int,
+                        default=15,
+                        help='Number of query samples')
+    parser.add_argument('--num_adapt_steps',
                         type=int,
                         default=5,
                         help='Number of inner loop steps')
+    parser.add_argument('--mc-steps',
+                        type=int,
+                        default=1,
+                        help='Number of Monte Carlo estimation steps')
     parser.add_argument('--inner-lr',
                         type=float,
                         default=0.1,
@@ -102,7 +108,7 @@ def get_dataloader(args):
                            shots=args.num_shots,
                            ways=args.num_ways,
                            shuffle=True,
-                           test_shots=15,
+                           test_shots=args.num_query,
                            meta_train=args.mode == 'train',
                            download=args.download)
     else:
@@ -110,7 +116,7 @@ def get_dataloader(args):
                                shots=args.num_shots,
                                ways=args.num_ways,
                                shuffle=True,
-                               test_shots=15,
+                               test_shots=args.num_query,
                                meta_train=args.mode == 'train',
                                download=args.download)
 
@@ -127,22 +133,65 @@ def train(args, model, dataloader):
     model.to(device=args.device)
     model.train()
     meta_optimizer = torch.optim.Adam(model.parameters(), args.meta_lr)
+    # optimize over main network parameters
+    inner_optimizer = torch.optim.SGD([{
+        'params': model.get_main_net_params(),
+        'lr': args.inner_lr
+    }, {
+        'params': model.get_other_params(),
+        'lr': 0.0
+    }])
+    # import pdb
+    # pdb.set_trace()
     metalearner = MetaDropoutLearner(model,
                                      meta_optimizer,
-                                     num_adaptation_steps=args.num_steps,
-                                     step_size=args.step_size,
+                                     inner_optimizer,
+                                     num_adaptation_steps=args.num_adapt_steps,
+                                     mc_steps=args.mc_steps,
+                                     step_size=args.inner_lr,
                                      grad_clip=args.grad_clip,
                                      device=args.device)
 
     # Training loop
     metalearner.train(dataloader,
-                      max_batches=834,
+                      max_batches=args.num_iters // args.batch_size,
                       verbose=args.verbose,
                       desc='Training',
                       leave=False)
     # Save best mode
-    with open(args.model_path, 'wb') as f:
+    with open(args.savedir, 'wb') as f:
         torch.save(model.state_dict(), f)
+
+
+def test(args, model, dataloader):
+
+    model.to(device=args.device)
+    # optimize over main network parameters
+    inner_optimizer = torch.optim.SGD([{
+        'params': model.get_main_net_params(),
+        'lr': args.inner_lr
+    }, {
+        'params': model.get_other_params(),
+        'lr': 0.0
+    }])
+    metalearner = MetaDropoutLearner(model,
+                                     inner_optimizer,
+                                     num_adaptation_steps=args.num_adapt_steps,
+                                     mc_steps=args.mc_steps,
+                                     step_size=args.inner_lr,
+                                     device=args.device)
+    results = metalearner.evaluate(dataloader,
+                                   max_batches=args.num_test_iters //
+                                   args.batch_size,
+                                   verbose=args.verbose,
+                                   desc='Test',
+                                   num_test_iters=args.num_test_iters,
+                                   leave=False)
+    print(
+        "Accuracy: {results['accuracy_mean']} +- {results['accuracy_95_conf']} "
+    )
+    with open(args.savedir + '/results.json', 'w') as f:
+        json.dump(results, f)
 
 
 if __name__ == '__main__':
@@ -158,3 +207,5 @@ if __name__ == '__main__':
 
     if args.mode == 'train':
         train(args, model, dataloader)
+    else:
+        test(args, model, dataloader)
