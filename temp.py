@@ -77,7 +77,8 @@ class MetaDropoutLearner(object):
                 with torch.set_grad_enabled(self.model.training):
                     test_logits = self.model(test_inputs)
                     outer_loss = self.loss_function(test_logits, test_targets)
-                    outer_loss.backward()
+                    if self.model.training:
+                        outer_loss.backward()
                     results['outer_losses'][task_id] = outer_loss.item()
                     mean_outer_loss += outer_loss.item()
 

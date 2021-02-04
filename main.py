@@ -18,12 +18,12 @@ def get_args():
                         default='./data',
                         help='Path to the folder the data is downloaded to.')
     parser.add_argument(
-        '--num-shots',
+        '--num_shots',
         type=int,
         default=5,
         help='Number of examples per class (k in "k-shot", default: 5).')
     parser.add_argument(
-        '--num-ways',
+        '--num_ways',
         type=int,
         default=20,
         help='Number of classes per task (N in "N-way", default: 5).')
@@ -43,22 +43,22 @@ def get_args():
         default=None,
         help='Path to the output folder for saving the model (optional).')
     parser.add_argument(
-        '--batch-size',
+        '--batch_size',
         type=int,
         default=16,
         help='Number of tasks in a mini-batch of tasks (default: 16).')
     parser.add_argument(
-        '--num-iters',
+        '--num_iters',
         type=int,
         default=40000,
         help='Number of batches the model is trained over (default: 40000).')
     parser.add_argument(
-        '--num-test-iters',
+        '--num_test_iters',
         type=int,
         default=1000,
         help='Number of batches the model is tested over (default: 1000).')
     parser.add_argument(
-        '--num-workers',
+        '--num_workers',
         type=int,
         default=1,
         help='Number of workers for data loading (default: 1).')
@@ -80,19 +80,19 @@ def get_args():
                         type=int,
                         default=5,
                         help='Number of inner loop steps')
-    parser.add_argument('--mc-steps',
+    parser.add_argument('--mc_steps',
                         type=int,
                         default=1,
                         help='Number of Monte Carlo estimation steps')
-    parser.add_argument('--inner-lr',
+    parser.add_argument('--inner_lr',
                         type=float,
                         default=0.1,
                         help='Learning rate of the inner optimization loop')
-    parser.add_argument('--meta-lr',
+    parser.add_argument('--meta_lr',
                         type=float,
                         default=0.1,
                         help='Learning rate of the outer optimization loop')
-    parser.add_argument('--grad-clip',
+    parser.add_argument('--grad_clip',
                         type=float,
                         default=3.0,
                         help='Gradient clipping value')
@@ -109,7 +109,7 @@ def get_dataloader(args):
                            ways=args.num_ways,
                            shuffle=True,
                            test_shots=args.num_query,
-                           meta_train=args.mode == 'train',
+                           meta_split=args.mode,
                            download=args.download)
     else:
         dataset = miniimagenet(args.folder,
@@ -117,7 +117,7 @@ def get_dataloader(args):
                                ways=args.num_ways,
                                shuffle=True,
                                test_shots=args.num_query,
-                               meta_train=args.mode == 'train',
+                               meta_split=args.mode,
                                download=args.download)
 
     dataloader = BatchMetaDataLoader(dataset,
@@ -159,13 +159,14 @@ def train(args, model, dataloader):
                       desc='Training',
                       leave=False)
     # Save best mode
-    with open(args.savedir, 'wb') as f:
+    with open(args.savedir + '/model.pth', 'wb') as f:
         torch.save(model.state_dict(), f)
 
 
 def test(args, model, dataloader):
 
     model.to(device=args.device)
+    model.eval()
     # optimize over main network parameters
     inner_optimizer = torch.optim.SGD([{
         'params': model.get_main_net_params(),
@@ -175,7 +176,7 @@ def test(args, model, dataloader):
         'lr': 0.0
     }])
     metalearner = MetaDropoutLearner(model,
-                                     inner_optimizer,
+                                     inner_optimizer=inner_optimizer,
                                      num_adaptation_steps=args.num_adapt_steps,
                                      mc_steps=args.mc_steps,
                                      step_size=args.inner_lr,
@@ -198,14 +199,16 @@ if __name__ == '__main__':
 
     # Get the command line arguments
     args = get_args()
-    args.device = torch.device(
-        'cuda' if args.use_cuda and torch.cuda.is_available() else 'cpu')
-    # Load the model
-    model = MetaDropout(args)
+    args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     # load the dataloader
     dataloader = get_dataloader(args)
+    # Load the model
+    model = MetaDropout(args)
 
     if args.mode == 'train':
+
         train(args, model, dataloader)
     else:
+        with open(args.savedir + '/model.pth', 'rb') as f:
+            model.load_state_dict(torch.load(f))
         test(args, model, dataloader)
