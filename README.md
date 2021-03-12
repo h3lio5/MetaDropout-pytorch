@@ -9,3 +9,4 @@ You may setup the repository on your local machine by either downloading it or r
 ``` Batchfile
 git clone https://github.com/h3lio5/MetaDropout-pytorch.git
 ```
+**Note: This project is still in progress.**
